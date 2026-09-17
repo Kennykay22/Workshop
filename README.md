@@ -1,15 +1,15 @@
-# 🌀 Portail lumineux avec détection IR (ESP8266)
+# Portail lumineux avec détection IR (ESP8266)
 
 Ce projet repose sur une carte **NodeMCU ESP8266**. Il pilote un bandeau LED RGB qui réagit à son environnement : la couleur suit la luminosité ambiante, et lorsqu'un capteur détecte un objet à proximité, un effet « portail » se déclenche avec un signal sonore. L'inspiration visuelle vient du *portal gun* (couleurs vert-cyan).
 
-## ✨ Fonctionnement
+## Fonctionnement
 
 Le programme alterne entre deux modes :
 
 - **Mode ambiance** : le bandeau affiche un dégradé fluide qui suit la lumière de la pièce — bleu dans l'obscurité, puis vert, puis rouge en pleine lumière. Les transitions sont lissées pour éviter les à-coups.
 - **Mode portail** : dès qu'un objet est détecté, l'effet ambiance laisse place à un fondu vers un vert-cyan lumineux, accompagné d'une série de bips. Tant que l'objet reste présent, la lumière « respire » avec un léger scintillement. À son départ, le portail se referme et le mode ambiance reprend.
 
-## 🔌 Matériel et branchements
+## Matériel et branchements
 
 | Composant | Broche |
 |-----------|--------|
@@ -22,14 +22,14 @@ Le programme alterne entre deux modes :
 
 La photorésistance est montée en **diviseur de tension** (`3.3V → LDR → A0 → résistance → GND`). Chaque couleur du bandeau est commandée par un **MOSFET IRLB8721PBF** (avec une résistance de 220Ω sur la gate), car le bandeau consomme trop de courant pour être alimenté directement par la carte.
 
-## 🧠 Les points clés du code
+## Les points clés du code
 
 - **Correction gamma** : une table (`buildGammaTable`) recalcule les valeurs PWM pour que les fondus paraissent naturels à l'œil, plutôt que linéaires.
 - **Lissage de la lumière** : la valeur de la photorésistance est adoucie progressivement (`LISSAGE`) au lieu d'être utilisée brute, ce qui évite les sauts de couleur.
 - **Anti-rebond du capteur IR** : un changement d'état n'est validé que si le signal reste stable pendant `DEBOUNCE_MS`, ce qui empêche les fausses détections.
 - **Effets portail** : `openPortal()` (fondu d'ouverture), `portalIdle()` (respiration en continu), `closePortal()` (fermeture) et `sonPortail()` (bips via `tone()`, car le buzzer est passif).
 
-## ⚙️ Réglages ajustables
+## Réglages ajustables
 
 Plusieurs constantes en haut du fichier permettent d'adapter le comportement :
 
@@ -39,7 +39,7 @@ Plusieurs constantes en haut du fichier permettent d'adapter le comportement :
 - `GAMMA_EXP` — intensité de la correction gamma
 - `PORTAL_R / G / B` — couleur du portail
 
-## 🚀 Utilisation
+## Utilisation
 
 1. Réaliser les branchements décrits ci-dessus.
 2. Ouvrir le code dans l'IDE Arduino avec le support **ESP8266** installé.
