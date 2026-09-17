@@ -1,50 +1,75 @@
-# Portail lumineux avec détection IR (ESP8266)
+# Portail RickLab™ — Détecteur IR + Ambiance lumineuse (ESP8266)
 
-Ce projet repose sur une carte **NodeMCU ESP8266**. Il pilote un bandeau LED RGB qui réagit à son environnement : la couleur suit la luminosité ambiante, et lorsqu'un capteur détecte un objet à proximité, un effet « portail » se déclenche avec un signal sonore. L'inspiration visuelle vient du *portal gun* (couleurs vert-cyan).
+Projet réalisé dans le cadre du Workshop national RickLab™ (EPSI, Bachelor 2, session Septembre 2026). Un portail lumineux inspiré de l'univers Rick et Morty : un bandeau LED RGB piloté par une carte NodeMCU ESP8266, qui réagit en continu à son environnement et se déclenche au passage d'une personne.
 
 ## Fonctionnement
 
-Le programme alterne entre deux modes :
+Deux comportements cohabitent :
 
-- **Mode ambiance** : le bandeau affiche un dégradé fluide qui suit la lumière de la pièce — bleu dans l'obscurité, puis vert, puis rouge en pleine lumière. Les transitions sont lissées pour éviter les à-coups.
-- **Mode portail** : dès qu'un objet est détecté, l'effet ambiance laisse place à un fondu vers un vert-cyan lumineux, accompagné d'une série de bips. Tant que l'objet reste présent, la lumière « respire » avec un léger scintillement. À son départ, le portail se referme et le mode ambiance reprend.
+- **Mode ambiance** (actif en permanence) : la couleur du bandeau varie en fonction de la luminosité ambiante mesurée par une photorésistance (LDR) — violet/bleu dans l'obscurité, puis cyan, vert, jaune, jusqu'au rouge en pleine lumière. La lecture est lissée pour éviter les sauts de couleur.
+- **Mode portail** (déclenché par le capteur infrarouge) : dès qu'une présence est détectée, l'ambiance est interrompue pour jouer une séquence complète — un signal sonore (buzzer), un fondu vers un vert-cyan caractéristique du portail, un effet de "respiration" tant que la présence est maintenue, puis un fondu vers le noir à la fermeture. Le mode ambiance reprend ensuite automatiquement.
 
 ## Matériel et branchements
 
-| Composant | Broche |
-|-----------|--------|
-| Capteur IR de proximité (OUT) | D2 |
-| Buzzer passif (+) | D3 |
-| Photorésistance (LDR) | A0 |
-| Bandeau RGB — rouge (via MOSFET) | D8 |
-| Bandeau RGB — vert (via MOSFET) | D7 |
-| Bandeau RGB — bleu (via MOSFET) | D6 |
+| Composant | Broche ESP8266 | Détail |
+|---|---|---|
+| Capteur infrarouge MH-B | D2 | Sortie active à l'état bas (0 = détection) |
+| Buzzer passif | D3 | Piloté via `tone()` |
+| Photorésistance (LDR) | A0 | Montée en pont diviseur de tension avec une résistance fixe de 10 kΩ |
+| MOSFET canal Rouge (Q1) | D8 → grille | IRLB8721, résistance de grille 220 Ω + pull-down 10 kΩ |
+| MOSFET canal Vert (Q2) | D7 → grille | Même montage |
+| MOSFET canal Bleu (Q3) | D6 → grille | Même montage |
+| Bandeau LED RGB | — | Anode commune +5V (alimentation externe, indépendante de l'ESP8266) ; cathodes pilotées par les MOSFET |
 
-La photorésistance est montée en **diviseur de tension** (`3.3V → LDR → A0 → résistance → GND`). Chaque couleur du bandeau est commandée par un **MOSFET IRLB8721PBF** (avec une résistance de 220Ω sur la gate), car le bandeau consomme trop de courant pour être alimenté directement par la carte.
+Chaque canal de couleur est commuté côté masse (low-side switching), ce qui permet à un GPIO 3,3V de piloter une charge alimentée en 5V sans interface supplémentaire.
 
-## Les points clés du code
+## Points clés du code
 
-- **Correction gamma** : une table (`buildGammaTable`) recalcule les valeurs PWM pour que les fondus paraissent naturels à l'œil, plutôt que linéaires.
-- **Lissage de la lumière** : la valeur de la photorésistance est adoucie progressivement (`LISSAGE`) au lieu d'être utilisée brute, ce qui évite les sauts de couleur.
-- **Anti-rebond du capteur IR** : un changement d'état n'est validé que si le signal reste stable pendant `DEBOUNCE_MS`, ce qui empêche les fausses détections.
-- **Effets portail** : `openPortal()` (fondu d'ouverture), `portalIdle()` (respiration en continu), `closePortal()` (fermeture) et `sonPortail()` (bips via `tone()`, car le buzzer est passif).
+- **Correction gamma** (`construireTableGamma`) — compense la perception non linéaire de l'œil pour des dégradés PWM homogènes.
+- **Lissage de la lecture LDR** (constante `LISSAGE`) — filtre exponentiel qui évite les sauts de couleur dus au bruit du capteur.
+- **Anti-rebond IR** (`ANTI_REBOND_MS`, 200 ms) — un changement d'état du capteur n'est validé qu'après une durée de stabilité.
+- **Maintien de détection** (`MAINTIEN_MS`, 1500 ms) — une présence reste considérée comme détectée jusqu'à 1,5 s après la dernière lecture stable, pour éviter que l'animation ne redémarre en boucle si le faisceau est momentanément coupé.
+- **Séquence d'animation du portail** — `sonPortail()` (bips ascendants), `ouvrirPortail()` (fondu d'ouverture avec scintillement), `portailStable()` (respiration sinusoïdale), `fermerPortail()` (fondu de fermeture).
 
 ## Réglages ajustables
 
-Plusieurs constantes en haut du fichier permettent d'adapter le comportement :
+Constantes en haut du fichier `.ino` :
 
-- `IR_ACTIVE` — niveau du capteur lors d'une détection (`HIGH` ou `LOW`)
-- `LDR_MIN` / `LDR_MAX` — plage de la photorésistance (à relever via le Moniteur Série)
-- `LISSAGE` — vitesse du fondu de l'ambiance
-- `GAMMA_EXP` — intensité de la correction gamma
-- `PORTAL_R / G / B` — couleur du portail
+- `PHOTORESISTANCE_MIN` / `PHOTORESISTANCE_MAX` — plage de calibration de la LDR (à relever via le Moniteur Série selon la luminosité de la pièce)
+- `LISSAGE` — vitesse de réaction du mode ambiance
+- `EXPOSANT_GAMMA` — intensité de la correction gamma
+- `PORTAIL_R` / `PORTAIL_G` / `PORTAIL_B` — couleur du portail à l'ouverture
+- `ANTI_REBOND_MS` / `MAINTIEN_MS` — réglages de la détection IR
 
 ## Utilisation
 
 1. Réaliser les branchements décrits ci-dessus.
-2. Ouvrir le code dans l'IDE Arduino avec le support **ESP8266** installé.
-3. Sélectionner la carte **NodeMCU** et le bon port.
+2. Ouvrir le code dans l'IDE Arduino avec le support ESP8266 installé.
+3. Sélectionner la carte **NodeMCU 1.0 (ESP-12E Module)** et le bon port.
 4. Téléverser le programme.
-5. Ouvrir le **Moniteur Série à 9600 bauds** pour observer les valeurs et ajuster les seuils.
+5. Ouvrir le Moniteur Série à 9600 bauds pour observer les valeurs brutes de la LDR et ajuster `PHOTORESISTANCE_MIN` / `PHOTORESISTANCE_MAX` si besoin.
 
-Le bandeau s'anime alors automatiquement, et le portail se déclenche au passage d'un objet devant le capteur. 🎉
+## Structure du dépôt
+
+```
+├── code/
+│   └── ir_buzzer_ldr_bandeau.ino
+├── 3D/
+│   ├── Rick Workshop base.f3d
+│   ├── portail.f3d
+│   └── Rick Workshop cache diffusant led.f3d
+├── images/
+│   ├── Rick Workshop v7.png
+│   ├── portail.png
+│   ├── socle et cache.png
+│   └── Cache difusant.png
+├── schemas/
+│   └── schema_electronique.png
+├── documentation/
+│   └── Workshop2026-B2g5-dossier.pdf
+└── README.md
+```
+
+## Équipe
+
+*à compléter avec les noms de l'équipe*
