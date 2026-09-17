@@ -13,13 +13,14 @@
         D6 (GPIO12) -> R4 (220Ω) -> Gate Q3 -> Drain Q3 -> B (bleu)
 
   Comportement :
-    1. Par défaut, le bandeau affiche un dégradé fluide bleu (sombre)
+    1. En permanence, le bandeau affiche un dégradé fluide bleu (sombre)
        -> vert -> rouge (clair) piloté par la photorésistance, avec un
        lissage exponentiel pour que ça glisse en douceur au lieu de sauter.
-    2. Le capteur IR détecte un objet proche
-         -> le portail prend le dessus (effet vert/cyan) + léger bip
-         -> respiration/scintillement tant que l'objet reste détecté
-         -> à son départ : fermeture, puis retour à l'effet lumière ambiant
+    2. Dès que le capteur IR détecte quelque chose
+         -> l'animation portail se joue UNE FOIS (bips + ouverture +
+            ~2s de respiration + fermeture, soit ~5s au total)
+         -> puis retour immédiat à l'effet lumière
+       Pour redéclencher, le capteur doit d'abord repasser au repos.
 
   Anti-rebond : le capteur IR est filtré (DEBOUNCE_MS) pour éviter les
   fausses détections répétées si son signal est instable.
@@ -34,8 +35,9 @@ const uint8_t PIN_G      = D7;   // bandeau - vert  (via MOSFET)
 const uint8_t PIN_B      = D6;   // bandeau - bleu  (via MOSFET)
 
 // ---------- RÉGLAGES ----------
-#define IR_ACTIVE         HIGH  // niveau du capteur IR quand il DÉTECTE (remets LOW si ça ne corrige pas le souci)
-const unsigned long DEBOUNCE_MS = 60;  // stabilité exigée avant de valider un changement d'état IR
+#define IR_ACTIVE         LOW   // le capteur sort 0 quand il DÉTECTE (vérifié : main devant = IR brut 0)
+const unsigned long DEBOUNCE_MS = 200;   // stabilité exigée avant de valider un changement d'état IR
+const unsigned long HOLD_MS = 1500;      // une détection reste "vraie" au moins ce temps, même si le capteur décroche
 
 // Plage mesurée de la photorésistance (à ajuster si besoin via le Moniteur Série)
 const int LDR_MIN = 57;    // valeur dans le noir
@@ -52,7 +54,7 @@ const uint8_t PORTAL_G = 255;
 const uint8_t PORTAL_B = 90;
 
 // ---------- VARIABLES D'ÉTAT ----------
-bool portalActive = false;
+bool armeIR = true;   // le portail ne peut se redéclencher qu'une fois l'objet reparti
 
 bool derniereLectureIR = false;
 bool etatIRStable = false;
@@ -117,13 +119,21 @@ void closePortal(uint16_t durationMs = 800) {
 
 // --- Bips d'activation quand le portail s'allume (buzzer PASSIF : tone()) ---
 // Série de bips courts sur ~1s, pas un son continu.
+// Le bandeau est coupé pendant le son (tone() perturbe le PWM logiciel de
+// l'ESP8266, ce qui causerait un léger scintillement sinon), puis remis
+// exactement à la couleur qu'il avait avant.
 void sonPortail() {
+  uint8_t avantR = curR, avantG = curG, avantB = curB;
+  setColor(0, 0, 0);   // coupe le bandeau pendant le son
+
   int frequences[] = {600, 800, 1000, 1200};
   for (int i = 0; i < 4; i++) {
     tone(PIN_BUZZER, frequences[i], 150);
     delay(250);
   }
   noTone(PIN_BUZZER);
+
+  setColor(avantR, avantG, avantB);   // on remet la couleur d'avant
 }
 
 // --- Scintillement façon flamme/bougie (à appeler en boucle pendant l'effet) ---
@@ -154,19 +164,18 @@ void setup() {
 }
 
 void loop() {
-  gererCapteurIR();
-
-  if (portalActive) {
-    portalIdle();
-  } else {
-    effetLumiere();   // dégradé bleu->vert->rouge piloté par la photorésistance
-  }
-
+  gererCapteurIR();   // si détection -> joue l'animation portail (une fois)
+  effetLumiere();     // le reste du temps : couleurs selon la photorésistance
   delay(15);
 }
 
-// ----- Lecture anti-rebond du capteur IR -----
+// ----- Lecture anti-rebond du capteur IR, avec maintien anti-creux -----
+// Le capteur peut "décrocher" brièvement alors que l'objet est toujours là :
+// une fois une détection validée, on la considère vraie pendant HOLD_MS même
+// si le signal retombe entre-temps.
 bool lireIRDebounce() {
+  static unsigned long derniereDetection = 0;
+
   bool lecture = (digitalRead(PIN_IR) == IR_ACTIVE);
   if (lecture != derniereLectureIR) {
     dernierChangementIR = millis();
@@ -176,6 +185,10 @@ bool lireIRDebounce() {
     etatIRStable = derniereLectureIR;
   }
 
+  if (etatIRStable) {
+    derniereDetection = millis();
+  }
+
   static unsigned long dernierLogIR = 0;
   if (millis() - dernierLogIR > 500) {
     dernierLogIR = millis();
@@ -183,28 +196,55 @@ bool lireIRDebounce() {
     Serial.println(digitalRead(PIN_IR));
   }
 
-  return etatIRStable;
+  // détection considérée active tant qu'on est dans la fenêtre de maintien
+  return (millis() - derniereDetection) < HOLD_MS;
 }
 
-// ----- Capteur IR : ouvre/ferme le portail + léger son -----
+// ----- Capteur IR : joue l'animation portail une fois à la détection -----
 void gererCapteurIR() {
   bool detecte = lireIRDebounce();
-  static bool dejaJoue = false;
 
-  if (detecte && !dejaJoue) {
-    dejaJoue = true;
-    portalActive = true;
-    sonPortail();
-    openPortal();
+  if (detecte && armeIR) {
+    armeIR = false;
+    animationPortail();
   }
-  if (!detecte && dejaJoue) {
-    dejaJoue = false;
-    portalActive = false;
-    closePortal();
+  if (!detecte) {
+    armeIR = true;   // le capteur est repassé au repos, on peut redéclencher
+  }
+}
+
+// ----- Animation portail complète : son + ouverture + maintien + fermeture -----
+void animationPortail() {
+  sonPortail();
+  openPortal();
+
+  unsigned long debut = millis();
+  while (millis() - debut < 2000) {   // portail bien visible 2s
+    portalIdle();
+    delay(15);
+  }
+
+  closePortal();
+}
+
+// Convertit une teinte (0-359°) en RGB saturé à fond
+void hueToRGB(uint16_t hue, uint8_t &r, uint8_t &g, uint8_t &b) {
+  uint8_t region = hue / 60;
+  uint8_t remainder = (hue % 60) * 255 / 60;
+
+  switch (region) {
+    case 0: r = 255; g = remainder; b = 0; break;
+    case 1: r = 255 - remainder; g = 255; b = 0; break;
+    case 2: r = 0; g = 255; b = remainder; break;
+    case 3: r = 0; g = 255 - remainder; b = 255; break;
+    case 4: r = remainder; g = 0; b = 255; break;
+    default: r = 255; g = 0; b = 255 - remainder; break;
   }
 }
 
 // ----- Effet lumière ambiant : dégradé fluide piloté par la photorésistance -----
+// Parcourt tout le spectre : violet (sombre) -> bleu -> cyan -> vert -> jaune
+// -> orange -> rouge (clair), au lieu de seulement 3 couleurs.
 void effetLumiere() {
   int brut = analogRead(PIN_LDR);
   lueLissee += (brut - lueLissee) * LISSAGE;   // lissage exponentiel, évite les à-coups
@@ -212,18 +252,11 @@ void effetLumiere() {
   int val = constrain((int)lueLissee, LDR_MIN, LDR_MAX);
   float t = (float)(val - LDR_MIN) / (LDR_MAX - LDR_MIN);   // 0 (sombre) -> 1 (clair)
 
+  // teinte 280° (violet) dans le noir -> 0° (rouge) en pleine lumière
+  uint16_t hue = (uint16_t)(280 - 280 * t);
+
   uint8_t r, g, b;
-  if (t <= 0.5) {
-    float t2 = t / 0.5;               // bleu -> vert
-    r = 0;
-    g = (uint8_t)(255 * t2);
-    b = (uint8_t)(255 * (1 - t2));
-  } else {
-    float t2 = (t - 0.5) / 0.5;       // vert -> rouge
-    r = (uint8_t)(255 * t2);
-    g = (uint8_t)(255 * (1 - t2));
-    b = 0;
-  }
+  hueToRGB(hue, r, g, b);
   setColor(r, g, b);
 
   static unsigned long dernierLog = 0;
@@ -232,6 +265,14 @@ void effetLumiere() {
     Serial.print("LDR brut=");
     Serial.print(brut);
     Serial.print("  lisse=");
-    Serial.println(lueLissee);
+    Serial.print(lueLissee);
+    Serial.print("  t=");
+    Serial.print(t);
+    Serial.print("  R=");
+    Serial.print(r);
+    Serial.print(" G=");
+    Serial.print(g);
+    Serial.print(" B=");
+    Serial.println(b);
   }
 }
