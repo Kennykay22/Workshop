@@ -69,7 +69,3 @@ Constantes en haut du fichier `.ino` :
 │   └── Workshop2026-B2g5-dossier.pdf
 └── README.md
 ```
-
-## Équipe
-
-*à compléter avec les noms de l'équipe*
